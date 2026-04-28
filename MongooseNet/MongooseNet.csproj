@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Build -->
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>preview</LangVersion>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+
+    <!-- XML docs -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+
+    <!-- NuGet identity -->
+    <PackageId>MongooseNet</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Ajin Varghese Chandy</Authors>           <!-- e.g. John Doe -->
+    <Company>Ajin Varghese Chandy</Company>        <!-- or same as Authors -->
+    <Product>MongooseNet</Product>
+    <Description>A lightweight Mongoose-inspired ODM for MongoDB in .NET. Provides a generic repository, fluent LINQ queries, pre-save hooks, automatic timestamp management, and one-line DI registration.</Description>
+    <Summary>Mongoose-style ODM for MongoDB in .NET 8/9/10.</Summary>
+    <PackageTags>mongodb;odm;repository;mongoose;dotnet;nosql;database</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/aajinn/MongooseNet</PackageProjectUrl>  <!-- your real repo URL -->
+    <RepositoryUrl>https://github.com/aajinn/MongooseNet</RepositoryUrl>            <!-- same -->
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Copyright>Copyright © 2026 Ajin Varghese Chandy</Copyright>
+
+    <!-- Source Link / deterministic build (important for NuGet trust) -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <!-- Pack README and icon into the NuGet package -->
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" Condition="Exists('..\README.md')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>MongooseNet.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MongoDB.Driver" Version="3.4.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>

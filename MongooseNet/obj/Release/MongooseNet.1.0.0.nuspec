@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+  <metadata>
+    <id>MongooseNet</id>
+    <version>1.0.0</version>
+    <authors>Ajin Varghese Chandy</authors>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <readme>README.md</readme>
+    <projectUrl>https://github.com/aajinn/MongooseNet</projectUrl>
+    <description>A lightweight Mongoose-inspired ODM for MongoDB in .NET. Provides a generic repository, fluent LINQ queries, pre-save hooks, automatic timestamp management, and one-line DI registration.</description>
+    <copyright>Copyright © 2026 Ajin Varghese Chandy</copyright>
+    <tags>mongodb odm repository mongoose dotnet nosql database</tags>
+    <repository type="git" url="https://github.com/aajinn/MongooseNet" />
+    <dependencies>
+      <group targetFramework="net8.0">
+        <dependency id="Microsoft.Extensions.DependencyInjection.Abstractions" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="Microsoft.Extensions.Options" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="MongoDB.Driver" version="3.4.0" exclude="Build,Analyzers" />
+      </group>
+      <group targetFramework="net9.0">
+        <dependency id="Microsoft.Extensions.DependencyInjection.Abstractions" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="Microsoft.Extensions.Options" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="MongoDB.Driver" version="3.4.0" exclude="Build,Analyzers" />
+      </group>
+      <group targetFramework="net10.0">
+        <dependency id="Microsoft.Extensions.DependencyInjection.Abstractions" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="Microsoft.Extensions.Options" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="MongoDB.Driver" version="3.4.0" exclude="Build,Analyzers" />
+      </group>
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="C:\Projects\MongooseNet\MongooseNet\bin\Release\net10.0\MongooseNet.dll" target="lib\net10.0\MongooseNet.dll" />
+    <file src="C:\Projects\MongooseNet\MongooseNet\bin\Release\net10.0\MongooseNet.xml" target="lib\net10.0\MongooseNet.xml" />
+    <file src="C:\Projects\MongooseNet\MongooseNet\bin\Release\net8.0\MongooseNet.dll" target="lib\net8.0\MongooseNet.dll" />
+    <file src="C:\Projects\MongooseNet\MongooseNet\bin\Release\net8.0\MongooseNet.xml" target="lib\net8.0\MongooseNet.xml" />
+    <file src="C:\Projects\MongooseNet\MongooseNet\bin\Release\net9.0\MongooseNet.dll" target="lib\net9.0\MongooseNet.dll" />
+    <file src="C:\Projects\MongooseNet\MongooseNet\bin\Release\net9.0\MongooseNet.xml" target="lib\net9.0\MongooseNet.xml" />
+    <file src="C:\Projects\MongooseNet\README.md" target="\README.md" />
+  </files>
+</package>

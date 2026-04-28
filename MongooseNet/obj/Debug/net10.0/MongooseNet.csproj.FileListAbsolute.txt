@@ -1,0 +1,14 @@
+C:\Projects\MongoNet\MongooseNet\bin\Debug\net10.0\MongooseNet.deps.json
+C:\Projects\MongoNet\MongooseNet\bin\Debug\net10.0\MongooseNet.dll
+C:\Projects\MongoNet\MongooseNet\bin\Debug\net10.0\MongooseNet.pdb
+C:\Projects\MongoNet\MongooseNet\bin\Debug\net10.0\MongooseNet.xml
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.csproj.AssemblyReference.cache
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.GeneratedMSBuildEditorConfig.editorconfig
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.AssemblyInfoInputs.cache
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.AssemblyInfo.cs
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.csproj.CoreCompileInputs.cache
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.dll
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\refint\MongooseNet.dll
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.xml
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\MongooseNet.pdb
+C:\Projects\MongoNet\MongooseNet\obj\Debug\net10.0\ref\MongooseNet.dll
