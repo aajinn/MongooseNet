@@ -5,7 +5,7 @@
 [![.NET](https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-blue)](https://dotnet.microsoft.com)
 
 A lightweight **Mongoose-inspired ODM** for MongoDB in .NET 8/9/10.  
-Fluent LINQ queries · Pre-save hooks · Auto timestamps · Declarative indexes · One-line DI setup.
+Fluent LINQ queries · Pagination · Pre-save hooks · Auto timestamps · Declarative indexes · One-line DI setup.
 
 ---
 
@@ -74,9 +74,17 @@ app.Run();
 ```csharp
 public class UsersController(IMongoRepository<User> users) : ControllerBase
 {
+    [HttpGet]
+    public Task<List<User>> GetAll()
+        => users.GetAllAsync();
+
     [HttpGet("search")]
     public Task<List<User>> Search(string email)
         => users.FindAsync(x => x.Email == email);
+
+    [HttpGet("page")]
+    public Task<PagedResult<User>> GetPage(int page = 1, int pageSize = 20)
+        => users.PageAsync(page: page, pageSize: pageSize, orderBy: x => x.CreatedAt, descending: true);
 
     [HttpGet("{id:guid}")]
     public Task<User> GetById(Guid id)
@@ -94,18 +102,57 @@ public class UsersController(IMongoRepository<User> users) : ControllerBase
 
 ---
 
+## Pagination
+
+`PageAsync` runs the count and data queries **in parallel** and returns a `PagedResult<T>` with everything you need to build pagination UI.
+
+```csharp
+// Basic — page 1, 20 items
+var result = await users.PageAsync();
+
+// Filtered + sorted
+var result = await users.PageAsync(
+    predicate:  x => x.IsActive,
+    page:       2,
+    pageSize:   10,
+    orderBy:    x => x.CreatedAt,
+    descending: true);
+
+Console.WriteLine($"Page {result.Page} of {result.TotalPages}");  // Page 2 of 5
+Console.WriteLine($"Total: {result.TotalCount}");                  // Total: 42
+Console.WriteLine($"Has next: {result.HasNextPage}");              // Has next: true
+
+foreach (var user in result.Items) { ... }
+```
+
+### PagedResult\<T\> properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Items` | `List<T>` | Documents on this page |
+| `TotalCount` | `long` | Total matching documents across all pages |
+| `Page` | `int` | Current page number (1-based) |
+| `PageSize` | `int` | Items per page |
+| `TotalPages` | `int` | Total number of pages |
+| `HasNextPage` | `bool` | `true` if more pages follow |
+| `HasPreviousPage` | `bool` | `true` if not on the first page |
+
+---
+
 ## API Reference
 
 ### BaseDocument
 
-| Member | Description |
-|---|---|
-| `Id` | `Guid`, mapped to MongoDB `_id` |
-| `CreatedAt` | UTC. Set once on first save, never overwritten |
-| `UpdatedAt` | UTC. Refreshed on every save |
-| `PreSave()` | Virtual hook — override to run logic before any write |
+| Member | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Mapped to MongoDB `_id`. Auto-assigned on construction |
+| `CreatedAt` | `DateTime` | UTC. Set once on first save, never overwritten |
+| `UpdatedAt` | `DateTime` | UTC. Refreshed on every save |
+| `PreSave()` | `virtual void` | Hook fired before any write — override for custom logic |
 
 ### IMongoRepository\<T\>
+
+#### Queries
 
 | Method | Returns | Description |
 |---|---|---|
@@ -114,17 +161,35 @@ public class UsersController(IMongoRepository<User> users) : ControllerBase
 | `GetByIdRequiredAsync(id)` | `T` | By id, throws `DocumentNotFoundException` if not found |
 | `FindAsync(predicate)` | `List<T>` | LINQ filter → all matches |
 | `FindOneAsync(predicate)` | `T?` | LINQ filter → first match or `null` |
+| `PageAsync(predicate?, page, pageSize, orderBy?, descending)` | `PagedResult<T>` | Paginated + optionally filtered and sorted results |
 | `CountAsync(predicate?)` | `long` | Count matching documents (all if predicate omitted) |
 | `ExistsAsync(predicate)` | `bool` | `true` if any document matches |
+
+#### Writes
+
+| Method | Returns | Description |
+|---|---|---|
 | `InsertAsync(doc)` | `T` | Insert one, fires `PreSave` |
 | `InsertManyAsync(docs)` | `Task` | Batch insert, fires `PreSave` on each |
 | `SaveAsync(doc)` | `T` | Upsert by id, fires `PreSave` |
-| `UpdateAsync(id, update)` | `bool` | Partial update via `UpdateDefinition<T>`, returns `true` if modified |
+| `UpdateAsync(id, update)` | `bool` | Partial update via `UpdateDefinition<T>`, auto-stamps `UpdatedAt` |
+
+#### Deletes
+
+| Method | Returns | Description |
+|---|---|---|
 | `DeleteAsync(id)` | `bool` | Delete by id, returns `true` if deleted |
 | `DeleteManyAsync(predicate)` | `long` | Delete all matches, returns count deleted |
-| `Collection` | `IMongoCollection<T>` | Raw driver collection for advanced queries |
+
+#### Raw access
+
+| Member | Type | Description |
+|---|---|---|
+| `Collection` | `IMongoCollection<T>` | Underlying driver collection for advanced scenarios |
 
 All methods accept an optional `CancellationToken ct` parameter.
+
+---
 
 ### MongooseOptions
 
@@ -141,12 +206,14 @@ builder.Services.AddMongooseModel<User>();
 builder.Services.AddMongooseModel<Product>();
 ```
 
+---
+
 ### Attributes
 
 | Attribute | Target | Description |
 |---|---|---|
 | `[CollectionName("name")]` | Class | Override the MongoDB collection name |
-| `[MongoIndex]` | Property | Declare an index on this field |
+| `[MongoIndex]` | Property | Declare a single-field index |
 
 `[MongoIndex]` parameters:
 
@@ -157,17 +224,19 @@ builder.Services.AddMongooseModel<Product>();
 | `name` | `string?` | `null` | Custom index name |
 | `order` | `int` | `1` | `1` = ascending, `-1` = descending |
 
+---
+
 ### Exceptions
 
 | Exception | Thrown by | Description |
 |---|---|---|
 | `DocumentNotFoundException` | `GetByIdRequiredAsync` | Document with the given id was not found |
-| `MongooseNetException` | base class | Base for all MongooseNet exceptions |
+| `MongooseNetException` | all repository methods | Base exception — wraps MongoDB driver errors |
 
-`DocumentNotFoundException` exposes `CollectionName` and `DocumentId` properties for structured error handling.
+`DocumentNotFoundException` exposes `CollectionName` and `DocumentId` for structured error handling.
 
 ---
 
 ## License
 
-MIT
+MIT © 2026 Ajin Varghese Chandy
