@@ -17,6 +17,12 @@ public class PageAsyncGuardTests
         mock.Setup(c => c.CollectionNamespace)
             .Returns(new CollectionNamespace("testdb", "testdocuments"));
 
+        // Database.Client is needed by the constructor for transaction support
+        var clientMock = new Mock<IMongoClient>();
+        var dbMock = new Mock<IMongoDatabase>();
+        dbMock.Setup(d => d.Client).Returns(clientMock.Object);
+        mock.Setup(c => c.Database).Returns(dbMock.Object);
+
         _repo = new MongoRepository<TestDocument>(mock.Object);
     }
 

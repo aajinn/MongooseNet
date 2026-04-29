@@ -5,8 +5,8 @@ namespace MongooseNet;
 
 /// <summary>
 /// Abstract base class for all MongooseNet documents.
-/// Provides <see cref="Id"/>, <see cref="CreatedAt"/>, and <see cref="UpdatedAt"/> fields,
-/// plus a <see cref="PreSave"/> lifecycle hook that mirrors Mongoose's <c>pre('save')</c>.
+/// Provides <see cref="Id"/>, <see cref="CreatedAt"/>, <see cref="UpdatedAt"/>,
+/// soft-delete support, and <see cref="PreSave"/> lifecycle hook.
 /// </summary>
 public abstract class BaseDocument
 {
@@ -27,6 +27,19 @@ public abstract class BaseDocument
     [BsonElement("updatedAt")]
     [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>
+    /// When set, the document is considered soft-deleted and excluded from standard queries.
+    /// <c>null</c> means the document is active.
+    /// </summary>
+    [BsonElement("deletedAt")]
+    [BsonIgnoreIfNull]
+    [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
+    public DateTime? DeletedAt { get; set; }
+
+    /// <summary>Returns <c>true</c> if this document has been soft-deleted.</summary>
+    [BsonIgnore]
+    public bool IsDeleted => DeletedAt.HasValue;
 
     /// <summary>
     /// Lifecycle hook invoked by the repository before any write operation.

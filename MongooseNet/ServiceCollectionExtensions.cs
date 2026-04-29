@@ -58,6 +58,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IMongoDatabase>(sp =>
             sp.GetRequiredService<IMongoClient>().GetDatabase(options.DatabaseName));
 
+        // Singleton: MongooseOptions (so repositories can read retry/soft-delete config)
+        services.TryAddSingleton(options);
+
         // Scoped: index builder (used at startup via EnsureMongoIndexesAsync)
         services.TryAddScoped<MongooseIndexBuilder>();
 
@@ -107,6 +110,7 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped(repoConcreteType, sp =>
         {
             var db = sp.GetRequiredService<IMongoDatabase>();
+            var opts = sp.GetService<MongooseOptions>();
             var collectionName = ResolveCollectionName(modelType);
 
             var getCollection = typeof(IMongoDatabase)
@@ -114,7 +118,7 @@ public static class ServiceCollectionExtensions
                 .MakeGenericMethod(modelType);
 
             var collection = getCollection.Invoke(db, [collectionName, null])!;
-            return Activator.CreateInstance(repoConcreteType, collection)!;
+            return Activator.CreateInstance(repoConcreteType, collection, opts)!;
         });
 
         // Also register as the interface so consumers can inject IMongoRepository<T>

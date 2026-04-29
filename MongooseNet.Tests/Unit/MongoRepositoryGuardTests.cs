@@ -25,6 +25,12 @@ public class MongoRepositoryGuardTests
             .Setup(c => c.CollectionNamespace)
             .Returns(new CollectionNamespace("testdb", "testdocuments"));
 
+        // Database.Client is needed by the constructor for transaction support
+        var clientMock = new Mock<IMongoClient>();
+        var dbMock = new Mock<IMongoDatabase>();
+        dbMock.Setup(d => d.Client).Returns(clientMock.Object);
+        _collectionMock.Setup(c => c.Database).Returns(dbMock.Object);
+
         _repo = new MongoRepository<TestDocument>(_collectionMock.Object);
     }
 
@@ -144,6 +150,6 @@ public class MongoRepositoryGuardTests
         var act = () => _repo.InsertAsync(doc);
 
         await act.Should().ThrowAsync<MongooseNetException>()
-            .WithMessage("*MongoDB*");
+            .WithMessage("*database*");
     }
 }

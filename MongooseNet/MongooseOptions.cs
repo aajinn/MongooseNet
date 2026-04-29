@@ -21,4 +21,24 @@ public sealed class MongooseOptions
     /// Default: <c>true</c>.
     /// </summary>
     public bool AutoRegisterModels { get; set; } = true;
+
+    /// <summary>
+    /// When <c>true</c>, standard query methods (<c>GetAllAsync</c>, <c>FindAsync</c>, etc.)
+    /// automatically exclude soft-deleted documents (those with a non-null <c>deletedAt</c>).
+    /// Set to <c>false</c> to include soft-deleted documents in all queries.
+    /// Default: <c>true</c>.
+    /// </summary>
+    public bool FilterSoftDeleted { get; set; } = true;
+
+    /// <summary>
+    /// Maximum number of times to retry a transient MongoDB operation before throwing.
+    /// Set to <c>0</c> to disable retries. Default: <c>3</c>.
+    /// </summary>
+    public int RetryCount { get; set; } = 3;
+
+    /// <summary>
+    /// Base delay between retries. Each retry doubles the delay (exponential back-off).
+    /// Default: 200 ms.
+    /// </summary>
+    public TimeSpan RetryDelay { get; set; } = TimeSpan.FromMilliseconds(200);
 }
