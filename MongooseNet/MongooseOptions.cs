@@ -1,8 +1,12 @@
+using Microsoft.Extensions.Options;
+
 namespace MongooseNet;
 
 /// <summary>
 /// Configuration options for MongooseNet.
-/// Set properties inside the <c>AddMongoose(opts => { ... })</c> delegate.
+/// Set properties inside the <c>AddMongoose(opts => { ... })</c> delegate,
+/// or bind from configuration and register <see cref="MongooseOptionsValidator"/>
+/// to validate at resolve time.
 /// </summary>
 public sealed class MongooseOptions
 {
@@ -41,4 +45,64 @@ public sealed class MongooseOptions
     /// Default: 200 ms.
     /// </summary>
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Validates the options and throws <see cref="InvalidOperationException"/> if
+    /// any required value is missing or out of range.
+    /// Called automatically by <see cref="MongooseOptionsValidator"/> when options
+    /// are resolved via <c>IOptions&lt;MongooseOptions&gt;</c>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when validation fails.</exception>
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(ConnectionString))
+            throw new InvalidOperationException("MongooseNet: ConnectionString must be set.");
+
+        if (string.IsNullOrWhiteSpace(DatabaseName))
+            throw new InvalidOperationException("MongooseNet: DatabaseName must be set.");
+
+        if (RetryCount < 0)
+            throw new InvalidOperationException("MongooseNet: RetryCount must be >= 0.");
+
+        if (RetryDelay < TimeSpan.Zero)
+            throw new InvalidOperationException("MongooseNet: RetryDelay must be >= 0.");
+    }
+}
+
+/// <summary>
+/// Validates <see cref="MongooseOptions"/> at resolve time when options are bound
+/// via the <c>IOptions&lt;MongooseOptions&gt;</c> pattern.
+/// </summary>
+/// <remarks>
+/// Register alongside your options binding:
+/// <code>
+/// services.AddOptions&lt;MongooseOptions&gt;()
+///         .BindConfiguration("MongooseNet")
+///         .ValidateOnStart();
+/// services.AddSingleton&lt;IValidateOptions&lt;MongooseOptions&gt;, MongooseOptionsValidator&gt;();
+/// </code>
+/// </remarks>
+public sealed class MongooseOptionsValidator : IValidateOptions<MongooseOptions>
+{
+    /// <inheritdoc/>
+    public ValidateOptionsResult Validate(string? name, MongooseOptions options)
+    {
+        var errors = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(options.ConnectionString))
+            errors.Add("ConnectionString must be set.");
+
+        if (string.IsNullOrWhiteSpace(options.DatabaseName))
+            errors.Add("DatabaseName must be set.");
+
+        if (options.RetryCount < 0)
+            errors.Add("RetryCount must be >= 0.");
+
+        if (options.RetryDelay < TimeSpan.Zero)
+            errors.Add("RetryDelay must be >= 0.");
+
+        return errors.Count > 0
+            ? ValidateOptionsResult.Fail(errors)
+            : ValidateOptionsResult.Success;
+    }
 }

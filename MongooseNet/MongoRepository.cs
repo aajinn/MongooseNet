@@ -182,7 +182,7 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         }
         catch (MongoException ex)
         {
-            throw new MongooseNetException($"A MongoDB error occurred: {ex.Message}", ex);
+            throw new MongooseNetException("A database error occurred. See inner exception for details.", ex);
         }
 
         using (cursor)
