@@ -27,6 +27,24 @@ public interface IMongoRepository<T> where T : BaseDocument
     /// <summary>Returns all documents matching <paramref name="predicate"/>.</summary>
     Task<List<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns a paginated result set, optionally filtered and sorted.
+    /// Runs a count and a data query in parallel for efficiency.
+    /// </summary>
+    /// <param name="predicate">Filter expression, or <c>null</c> for all documents.</param>
+    /// <param name="page">1-based page number. Defaults to 1.</param>
+    /// <param name="pageSize">Items per page. Defaults to 20.</param>
+    /// <param name="orderBy">Sort key expression (optional).</param>
+    /// <param name="descending">When <c>true</c>, sorts descending. Default: ascending.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<PagedResult<T>> PageAsync(
+        Expression<Func<T, bool>>? predicate = null,
+        int page = 1,
+        int pageSize = 20,
+        Expression<Func<T, object>>? orderBy = null,
+        bool descending = false,
+        CancellationToken ct = default);
+
     /// <summary>Returns the first document matching <paramref name="predicate"/>, or <c>null</c>.</summary>
     Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default);
 

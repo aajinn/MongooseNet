@@ -60,6 +60,44 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     }
 
     /// <inheritdoc/>
+    public async Task<PagedResult<T>> PageAsync(
+        Expression<Func<T, bool>>? predicate = null,
+        int page = 1,
+        int pageSize = 20,
+        Expression<Func<T, object>>? orderBy = null,
+        bool descending = false,
+        CancellationToken ct = default)
+    {
+        if (page < 1)      throw new ArgumentOutOfRangeException(nameof(page),     "Page must be >= 1.");
+        if (pageSize < 1)  throw new ArgumentOutOfRangeException(nameof(pageSize), "PageSize must be >= 1.");
+
+        var filter = predicate ?? (_ => true);
+
+        // Run count and data fetch in parallel
+        var countTask = Execute(() => _collection.CountDocumentsAsync(filter, cancellationToken: ct));
+
+        var cursor = _collection.Find(filter);
+
+        if (orderBy is not null)
+            cursor = descending ? cursor.SortByDescending(orderBy) : cursor.SortBy(orderBy);
+
+        var itemsTask = Execute(() => cursor
+            .Skip((page - 1) * pageSize)
+            .Limit(pageSize)
+            .ToListAsync(ct));
+
+        await Task.WhenAll(countTask, itemsTask);
+
+        return new PagedResult<T>
+        {
+            Items      = itemsTask.Result,
+            TotalCount = countTask.Result,
+            Page       = page,
+            PageSize   = pageSize,
+        };
+    }
+
+    /// <inheritdoc/>
     public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(predicate);
