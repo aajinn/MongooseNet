@@ -198,12 +198,38 @@ All methods accept an optional `CancellationToken ct` parameter.
 | `ConnectionString` | `string` | required | MongoDB connection string |
 | `DatabaseName` | `string` | required | Database to connect to |
 | `AutoRegisterModels` | `bool` | `true` | Auto-scan assembly and register repositories |
+| `FilterSoftDeleted` | `bool` | `true` | Exclude soft-deleted documents from standard queries |
+| `RetryCount` | `int` | `3` | Max retries for transient errors (`0` to disable) |
+| `RetryDelay` | `TimeSpan` | `200 ms` | Base delay between retries (doubles each attempt) |
 
 When `AutoRegisterModels` is `false`, register models individually:
 
 ```csharp
 builder.Services.AddMongooseModel<User>();
 builder.Services.AddMongooseModel<Product>();
+```
+
+#### Using IOptions\<MongooseOptions\>
+
+If you bind options from `appsettings.json` instead of the `AddMongoose` delegate, register `MongooseOptionsValidator` to catch missing or invalid values at startup:
+
+```csharp
+builder.Services.AddOptions<MongooseOptions>()
+    .BindConfiguration("MongooseNet")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<IValidateOptions<MongooseOptions>, MongooseOptionsValidator>();
+```
+
+`appsettings.json`:
+
+```json
+{
+  "MongooseNet": {
+    "ConnectionString": "mongodb://localhost:27017",
+    "DatabaseName": "myapp"
+  }
+}
 ```
 
 ---
@@ -214,6 +240,12 @@ builder.Services.AddMongooseModel<Product>();
 |---|---|---|
 | `[CollectionName("name")]` | Class | Override the MongoDB collection name |
 | `[MongoIndex]` | Property | Declare a single-field index |
+
+`[CollectionName]` validates the name at compile/startup time and rejects:
+- Null or whitespace
+- Names containing `$` or null bytes
+- Names starting with `system.`
+- Names whose UTF-8 encoding exceeds 120 bytes
 
 `[MongoIndex]` parameters:
 
@@ -234,6 +266,75 @@ builder.Services.AddMongooseModel<Product>();
 | `MongooseNetException` | all repository methods | Base exception — wraps MongoDB driver errors |
 
 `DocumentNotFoundException` exposes `CollectionName` and `DocumentId` for structured error handling.
+
+---
+
+### Soft Delete
+
+MongooseNet supports soft deletes out of the box via `DeletedAt` on `BaseDocument`.
+
+| Method | Returns | Description |
+|---|---|---|
+| `SoftDeleteAsync(id)` | `bool` | Stamps `DeletedAt`; document stays in MongoDB |
+| `RestoreAsync(id)` | `bool` | Clears `DeletedAt`, making the document active again |
+| `GetDeletedAsync()` | `List<T>` | Returns all soft-deleted documents |
+
+When `FilterSoftDeleted` is `true` (default), all standard query methods automatically exclude soft-deleted documents.
+
+---
+
+### Streaming
+
+For large collections, use `StreamAsync` to process documents one at a time via a server-side cursor instead of loading everything into memory:
+
+```csharp
+await foreach (var user in users.StreamAsync(x => x.IsActive))
+{
+    // process user
+}
+```
+
+---
+
+### Transactions
+
+```csharp
+await repo.WithTransactionAsync(async session =>
+{
+    await orders.InsertAsync(order);
+    await inventory.UpdateAsync(item.Id, update);
+});
+```
+
+Commits on success, rolls back automatically on any exception.
+
+---
+
+### Bulk Writes
+
+```csharp
+var requests = new List<WriteModel<User>>
+{
+    new InsertOneModel<User>(newUser),
+    new UpdateOneModel<User>(filter, update),
+    new DeleteOneModel<User>(deleteFilter),
+};
+
+await users.BulkWriteAsync(requests);
+```
+
+---
+
+## Changelog
+
+### 1.1.0
+- **`CollectionNameAttribute`** now validates names against MongoDB rules at construction time (rejects `$`, null bytes, `system.` prefix, names > 120 UTF-8 bytes)
+- **`MongooseOptions`** gains a `Validate()` method and a new `MongooseOptionsValidator` (`IValidateOptions<MongooseOptions>`) for validation when options are bound via `IOptions<>` / `appsettings.json`
+- **`MongooseOptions`** table in docs updated to include all properties (`FilterSoftDeleted`, `RetryCount`, `RetryDelay`)
+- Exception messages from repository methods no longer include raw MongoDB driver topology details
+
+### 1.0.0
+- Initial release
 
 ---
 

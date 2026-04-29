@@ -15,7 +15,7 @@
 
     <!-- NuGet identity -->
     <PackageId>MongooseNet</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>Ajin Varghese Chandy</Authors>           <!-- e.g. John Doe -->
     <Company>Ajin Varghese Chandy</Company>        <!-- or same as Authors -->
     <Product>MongooseNet</Product>
