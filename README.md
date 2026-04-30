@@ -33,6 +33,8 @@ public class User : BaseDocument
     [MongoIndex(unique: true, name: "idx_users_email")]
     public string Email { get; set; } = string.Empty;
 
+    public string Role { get; set; } = "user";
+
     public bool IsActive { get; set; } = true;
 
     public string PasswordHash { get; set; } = string.Empty;
@@ -86,7 +88,10 @@ app.Run();
 {
   "MongooseNet": {
     "ConnectionString": "mongodb://localhost:27017",
-    "DatabaseName": "myapp"
+    "DatabaseName": "myapp",
+    "FilterSoftDeleted": true,
+    "RetryCount": 3,
+    "RetryDelay": "00:00:00.200"
   }
 }
 ```
@@ -99,172 +104,178 @@ public class UsersController(IMongoRepository<User> users) : ControllerBase
     // ── Basic queries ──────────────────────────────────────────────────────────
 
     [HttpGet]
-    public Task<List<User>> GetAll()
-        => users.GetAllAsync(); // soft-deleted docs excluded automatically
+    public Task<List<User>> GetAll(CancellationToken ct)
+        => users.GetAllAsync(ct); // soft-deleted docs excluded automatically
 
     [HttpGet("{id:guid}")]
-    public Task<User> GetById(Guid id)
-        => users.GetByIdRequiredAsync(id); // throws DocumentNotFoundException if missing
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await users.GetByIdRequiredAsync(id, ct));
+        }
+        catch (DocumentNotFoundException ex)
+        {
+            return NotFound(new { ex.Message, ex.CollectionName, ex.DocumentId });
+        }
+    }
 
     [HttpGet("search")]
-    public Task<List<User>> Search(string email)
-        => users.FindAsync(x => x.Email == email);
+    public Task<List<User>> Search(string email, CancellationToken ct)
+        => users.FindAsync(x => x.Email == email, ct);
 
     [HttpGet("first")]
-    public Task<User?> FindFirst(string name)
-        => users.FindOneAsync(x => x.Name == name); // returns null if not found
+    public async Task<IActionResult> FindFirst(string role, CancellationToken ct)
+    {
+        var user = await users.FindOneAsync(x => x.Role == role, ct);
+        return user is null ? NotFound() : Ok(user);
+    }
 
     [HttpGet("count")]
-    public Task<long> Count()
-        => users.CountAsync(x => x.IsActive);
+    public Task<long> Count(CancellationToken ct)
+        => users.CountAsync(x => x.IsActive, ct);
 
     [HttpGet("exists")]
-    public Task<bool> EmailExists(string email)
-        => users.ExistsAsync(x => x.Email == email);
+    public Task<bool> EmailExists(string email, CancellationToken ct)
+        => users.ExistsAsync(x => x.Email == email, ct);
 
     // ── Projection — fetch only the fields you need ────────────────────────────
 
-    [HttpGet("emails")]
-    public Task<List<UserEmailDto>> GetEmails()
+    [HttpGet("summary")]
+    public Task<List<UserSummary>> GetSummaries(CancellationToken ct)
     {
         var projection = Builders<User>.Projection
-            .Expression(u => new UserEmailDto { Id = u.Id, Email = u.Email });
+            .Expression(u => new UserSummary(u.Id, u.Name, u.Email, u.Role));
 
-        return users.FindProjectedAsync(x => x.IsActive, projection);
+        return users.FindProjectedAsync(x => x.IsActive, projection, ct);
     }
 
     // ── Pagination ─────────────────────────────────────────────────────────────
 
     [HttpGet("page")]
-    public Task<PagedResult<User>> GetPage(int page = 1, int pageSize = 20)
+    public Task<PagedResult<User>> GetPage(int page = 1, int pageSize = 10, CancellationToken ct = default)
         => users.PageAsync(
             predicate:  x => x.IsActive,
             page:       page,
             pageSize:   pageSize,
             orderBy:    x => x.CreatedAt,
-            descending: true);
+            descending: true,
+            ct:         ct);
+
+    // ── Streaming ──────────────────────────────────────────────────────────────
+
+    [HttpGet("stream-emails")]
+    public async Task<List<string>> StreamEmails(CancellationToken ct)
+    {
+        var emails = new List<string>();
+        await foreach (var user in users.StreamAsync(x => x.IsActive, ct))
+            emails.Add(user.Email);
+        return emails;
+    }
 
     // ── Writes ─────────────────────────────────────────────────────────────────
 
     [HttpPost]
-    public async Task<IActionResult> Create(CreateUserRequest req)
+    public async Task<IActionResult> Create(CreateUserRequest req, CancellationToken ct)
     {
-        var user = new User
-        {
-            Name              = req.Name,
-            Email             = req.Email,
-            PlainTextPassword = req.Password,
-        };
-        await users.InsertAsync(user); // PreSave() fires automatically
+        var user = new User { Name = req.Name, Email = req.Email, PlainTextPassword = req.Password };
+        await users.InsertAsync(user, ct); // PreSave() fires automatically
         return CreatedAtAction(nameof(GetById), new { id = user.Id }, user);
     }
 
     [HttpPost("batch")]
-    public async Task<IActionResult> CreateMany(List<CreateUserRequest> reqs)
+    public async Task<IActionResult> CreateMany(List<CreateUserRequest> reqs, CancellationToken ct)
     {
         var docs = reqs.Select(r => new User
-        {
-            Name              = r.Name,
-            Email             = r.Email,
-            PlainTextPassword = r.Password,
-        }).ToList();
-
-        await users.InsertManyAsync(docs); // PreSave() fires on each
+            { Name = r.Name, Email = r.Email, PlainTextPassword = r.Password }).ToList();
+        await users.InsertManyAsync(docs, ct); // PreSave() fires on each
         return Ok(docs.Select(d => d.Id));
     }
 
-    [HttpPut("{id:guid}")]
-    public async Task<IActionResult> UpdateName(Guid id, string name)
+    [HttpPatch("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, UpdateUserRequest req, CancellationToken ct)
     {
-        var update = Builders<User>.Update.Set(x => x.Name, name);
-        var updated = await users.UpdateAsync(id, update); // auto-stamps UpdatedAt
-        return updated ? Ok() : NotFound();
+        var updates = new List<UpdateDefinition<User>>();
+        if (req.Name     is not null) updates.Add(Builders<User>.Update.Set(x => x.Name,     req.Name));
+        if (req.Role     is not null) updates.Add(Builders<User>.Update.Set(x => x.Role,     req.Role));
+        if (req.IsActive is not null) updates.Add(Builders<User>.Update.Set(x => x.IsActive, req.IsActive.Value));
+        if (updates.Count == 0) return BadRequest("No fields to update.");
+
+        return await users.UpdateAsync(id, Builders<User>.Update.Combine(updates), ct) // auto-stamps UpdatedAt
+            ? Ok() : NotFound();
     }
 
     // FindOneAndUpdate — atomic find + modify in a single round trip
-    [HttpPatch("{id:guid}/activate")]
-    public Task<User?> Activate(Guid id)
+    [HttpPatch("activate-by-email")]
+    public async Task<IActionResult> ActivateByEmail(string email, CancellationToken ct)
     {
         var update = Builders<User>.Update.Set(x => x.IsActive, true);
-        return users.FindOneAndUpdateAsync(x => x.Id == id, update, returnAfter: true);
+        var user   = await users.FindOneAndUpdateAsync(x => x.Email == email, update, returnAfter: true, ct: ct);
+        return user is null ? NotFound() : Ok(user);
     }
 
     // ── Soft delete ────────────────────────────────────────────────────────────
 
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> SoftDelete(Guid id)
-    {
-        var deleted = await users.SoftDeleteAsync(id); // stamps DeletedAt, doc stays in DB
-        return deleted ? Ok() : NotFound();
-    }
+    public async Task<IActionResult> SoftDelete(Guid id, CancellationToken ct)
+        => await users.SoftDeleteAsync(id, ct) ? NoContent() : NotFound(); // stamps DeletedAt
 
     [HttpPost("{id:guid}/restore")]
-    public async Task<IActionResult> Restore(Guid id)
-    {
-        var restored = await users.RestoreAsync(id); // clears DeletedAt
-        return restored ? Ok() : NotFound();
-    }
+    public async Task<IActionResult> Restore(Guid id, CancellationToken ct)
+        => await users.RestoreAsync(id, ct) ? Ok() : NotFound(); // clears DeletedAt
 
     [HttpGet("deleted")]
-    public Task<List<User>> GetDeleted()
-        => users.GetDeletedAsync();
+    public Task<List<User>> GetDeleted(CancellationToken ct)
+        => users.GetDeletedAsync(ct);
 
     // ── Hard delete ────────────────────────────────────────────────────────────
 
     [HttpDelete("{id:guid}/hard")]
-    public async Task<IActionResult> HardDelete(Guid id)
+    public async Task<IActionResult> HardDelete(Guid id, CancellationToken ct)
+        => await users.DeleteAsync(id, ct) ? NoContent() : NotFound();
+
+    [HttpDelete("inactive")]
+    public Task<long> DeleteInactive(CancellationToken ct)
+        => users.DeleteManyAsync(x => !x.IsActive, ct);
+
+    // ── Bulk writes ────────────────────────────────────────────────────────────
+
+    [HttpPost("bulk-activate")]
+    public async Task<IActionResult> BulkActivate(List<Guid> ids, CancellationToken ct)
     {
-        var deleted = await users.DeleteAsync(id);
-        return deleted ? Ok() : NotFound();
+        var requests = ids.Select(id =>
+            (WriteModel<User>)new UpdateOneModel<User>(
+                Builders<User>.Filter.Eq(x => x.Id, id),
+                Builders<User>.Update.Set(x => x.IsActive, true)
+                                     .Set(x => x.UpdatedAt, DateTime.UtcNow)
+            )).ToList();
+
+        var result = await users.BulkWriteAsync(requests, ct: ct);
+        return Ok(new { result.ModifiedCount });
+    }
+
+    // ── Transactions ───────────────────────────────────────────────────────────
+
+    [HttpPost("transactional-pair")]
+    public async Task<IActionResult> CreatePair(List<CreateUserRequest> reqs, CancellationToken ct)
+    {
+        if (reqs.Count != 2) return BadRequest("Exactly two users required.");
+        var created = new List<User>();
+
+        await users.WithTransactionAsync(async _ =>
+        {
+            foreach (var req in reqs)
+            {
+                var user = new User { Name = req.Name, Email = req.Email, PlainTextPassword = req.Password };
+                await users.InsertAsync(user, ct);
+                created.Add(user);
+            }
+        }, ct);
+        // Commits on success, rolls back automatically on any exception
+
+        return Ok(created.Select(u => u.Id));
     }
 }
-```
-
----
-
-## Streaming
-
-For large collections, use `StreamAsync` to process documents one at a time via a server-side cursor instead of loading everything into memory:
-
-```csharp
-await foreach (var user in users.StreamAsync(x => x.IsActive, ct))
-{
-    await SendWelcomeEmail(user);
-}
-```
-
----
-
-## Transactions
-
-```csharp
-await orders.WithTransactionAsync(async session =>
-{
-    await orders.InsertAsync(newOrder);
-    await inventory.UpdateAsync(item.Id,
-        Builders<InventoryItem>.Update.Inc(x => x.Stock, -1));
-});
-// Commits on success, rolls back automatically on any exception
-```
-
----
-
-## Bulk Writes
-
-Execute mixed write operations in a single round trip:
-
-```csharp
-var requests = new List<WriteModel<User>>
-{
-    new InsertOneModel<User>(newUser),
-    new UpdateOneModel<User>(
-        Builders<User>.Filter.Eq(x => x.Id, existingId),
-        Builders<User>.Update.Set(x => x.IsActive, false)),
-    new DeleteOneModel<User>(
-        Builders<User>.Filter.Eq(x => x.Id, staleId)),
-};
-
-BulkWriteResult<User> result = await users.BulkWriteAsync(requests);
 ```
 
 ---
@@ -436,14 +447,33 @@ builder.Services.AddSingleton<IValidateOptions<MongooseOptions>, MongooseOptions
 
 ---
 
+## Example Project
+
+A fully working ASP.NET Core Web API example is included in the repository under `MongooseNet.Example/`.  
+It demonstrates every feature with a `User` model and a `UsersController` that covers all endpoints listed in the Quick Start above.
+
+To run it:
+
+```bash
+# start a local MongoDB instance first (or update appsettings.json with your connection string)
+cd MongooseNet.Example
+dotnet run
+```
+
+---
+
 ## Changelog
+
+### 1.2.0
+- Added `MongooseNet.Example` — a complete ASP.NET Core Web API project demonstrating every feature end-to-end
+- Quick Start updated: all endpoints now pass `CancellationToken`, show `DeleteManyAsync`, `BulkWriteAsync`, `WithTransactionAsync`, and `StreamAsync` in context
+- README cleaned up and `appsettings.json` example expanded with all `MongooseOptions` fields
 
 ### 1.1.0
 - **`CollectionNameAttribute`** now validates names against MongoDB rules at construction time (rejects `$`, null bytes, `system.` prefix, names > 120 UTF-8 bytes)
 - **`MongooseOptions`** gains a `Validate()` method and a new `MongooseOptionsValidator` (`IValidateOptions<MongooseOptions>`) for validation when options are bound via `IOptions<>` / `appsettings.json`
 - **`MongooseOptions`** table updated to include all properties (`FilterSoftDeleted`, `RetryCount`, `RetryDelay`)
 - Exception messages from repository methods no longer include raw MongoDB driver topology details
-- Quick Start updated to cover all features: projection, soft delete, restore, streaming, transactions, bulk writes, `FindOneAndUpdateAsync`, `CountAsync`, `ExistsAsync`, `InsertManyAsync`
 
 ### 1.0.0
 - Initial release
