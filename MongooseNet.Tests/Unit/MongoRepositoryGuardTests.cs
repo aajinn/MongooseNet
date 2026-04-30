@@ -8,33 +8,29 @@ using MongooseNet.Tests.Fixtures;
 namespace MongooseNet.Tests.Unit;
 
 /// <summary>
-/// Tests that verify guard clauses, null checks, and exception wrapping
+/// Tests that verify guard clauses, null checks, transaction behavior, and exception wrapping
 /// without requiring a real MongoDB instance.
 /// </summary>
 public class MongoRepositoryGuardTests
 {
     private readonly Mock<IMongoCollection<TestDocument>> _collectionMock;
+    private readonly Mock<IMongoClient> _clientMock;
     private readonly MongoRepository<TestDocument> _repo;
 
     public MongoRepositoryGuardTests()
     {
         _collectionMock = new Mock<IMongoCollection<TestDocument>>();
-
-        // CollectionNamespace is needed by the constructor
         _collectionMock
             .Setup(c => c.CollectionNamespace)
             .Returns(new CollectionNamespace("testdb", "testdocuments"));
 
-        // Database.Client is needed by the constructor for transaction support
-        var clientMock = new Mock<IMongoClient>();
+        _clientMock = new Mock<IMongoClient>();
         var dbMock = new Mock<IMongoDatabase>();
-        dbMock.Setup(d => d.Client).Returns(clientMock.Object);
+        dbMock.Setup(d => d.Client).Returns(_clientMock.Object);
         _collectionMock.Setup(c => c.Database).Returns(dbMock.Object);
 
         _repo = new MongoRepository<TestDocument>(_collectionMock.Object);
     }
-
-    // ── Constructor ────────────────────────────────────────────────────────────
 
     [Fact]
     public void Constructor_NullCollection_Throws()
@@ -42,8 +38,6 @@ public class MongoRepositoryGuardTests
         var act = () => new MongoRepository<TestDocument>(null!);
         act.Should().Throw<ArgumentNullException>().WithParameterName("collection");
     }
-
-    // ── Guid.Empty guards ──────────────────────────────────────────────────────
 
     [Fact]
     public async Task GetByIdAsync_EmptyGuid_Throws()
@@ -74,8 +68,6 @@ public class MongoRepositoryGuardTests
         await act.Should().ThrowAsync<ArgumentException>().WithParameterName("id");
     }
 
-    // ── Null predicate guards ──────────────────────────────────────────────────
-
     [Fact]
     public async Task FindAsync_NullPredicate_Throws()
     {
@@ -103,8 +95,6 @@ public class MongoRepositoryGuardTests
         var act = () => _repo.DeleteManyAsync(null!);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
-
-    // ── Null document guards ───────────────────────────────────────────────────
 
     [Fact]
     public async Task InsertAsync_NullDocument_Throws()
@@ -134,8 +124,6 @@ public class MongoRepositoryGuardTests
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
-    // ── MongoDB exception wrapping ─────────────────────────────────────────────
-
     [Fact]
     public async Task InsertAsync_MongoException_WrappedAsMongooseNetException()
     {
@@ -151,5 +139,34 @@ public class MongoRepositoryGuardTests
 
         await act.Should().ThrowAsync<MongooseNetException>()
             .WithMessage("*database*");
+    }
+
+    [Fact]
+    public async Task WithTransactionAsync_UsesAmbientSession_ForRepositoryWrites()
+    {
+        var sessionMock = new Mock<IClientSessionHandle>();
+        _clientMock
+            .Setup(c => c.StartSessionAsync(It.IsAny<ClientSessionOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(sessionMock.Object);
+
+        _collectionMock
+            .Setup(c => c.InsertOneAsync(
+                sessionMock.Object,
+                It.IsAny<TestDocument>(),
+                It.IsAny<InsertOneOptions>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var doc = new TestDocument { Name = "tx", Email = "tx@test.com" };
+
+        await _repo.WithTransactionAsync(_ => _repo.InsertAsync(doc));
+
+        sessionMock.Verify(s => s.StartTransaction(It.IsAny<TransactionOptions>()), Times.Once);
+        sessionMock.Verify(s => s.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _collectionMock.Verify(c => c.InsertOneAsync(
+            sessionMock.Object,
+            It.IsAny<TestDocument>(),
+            It.IsAny<InsertOneOptions>(),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 }

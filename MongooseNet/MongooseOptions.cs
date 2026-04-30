@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using MongoDB.Driver;
 
 namespace MongooseNet;
 
@@ -10,6 +11,8 @@ namespace MongooseNet;
 /// </summary>
 public sealed class MongooseOptions
 {
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(1);
+
     /// <summary>
     /// The MongoDB connection string.
     /// Example: <c>mongodb://localhost:27017</c> or a full Atlas SRV URI.
@@ -66,6 +69,18 @@ public sealed class MongooseOptions
 
         if (RetryDelay < TimeSpan.Zero)
             throw new InvalidOperationException("MongooseNet: RetryDelay must be >= 0.");
+
+        if (RetryDelay > MaxRetryDelay)
+            throw new InvalidOperationException($"MongooseNet: RetryDelay must be <= {MaxRetryDelay}.");
+
+        try
+        {
+            _ = MongoUrl.Create(ConnectionString);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("MongooseNet: ConnectionString is not a valid MongoDB connection string.", ex);
+        }
     }
 }
 
@@ -87,22 +102,16 @@ public sealed class MongooseOptionsValidator : IValidateOptions<MongooseOptions>
     /// <inheritdoc/>
     public ValidateOptionsResult Validate(string? name, MongooseOptions options)
     {
-        var errors = new List<string>();
+        ArgumentNullException.ThrowIfNull(options);
 
-        if (string.IsNullOrWhiteSpace(options.ConnectionString))
-            errors.Add("ConnectionString must be set.");
-
-        if (string.IsNullOrWhiteSpace(options.DatabaseName))
-            errors.Add("DatabaseName must be set.");
-
-        if (options.RetryCount < 0)
-            errors.Add("RetryCount must be >= 0.");
-
-        if (options.RetryDelay < TimeSpan.Zero)
-            errors.Add("RetryDelay must be >= 0.");
-
-        return errors.Count > 0
-            ? ValidateOptionsResult.Fail(errors)
-            : ValidateOptionsResult.Success;
+        try
+        {
+            options.Validate();
+            return ValidateOptionsResult.Success;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ValidateOptionsResult.Fail(ex.Message);
+        }
     }
 }

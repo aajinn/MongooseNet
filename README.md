@@ -58,7 +58,7 @@ public class User : BaseDocument
 ### 2. Register in Program.cs
 
 ```csharp
-// Option A — inline delegate (validated immediately at startup)
+// Option A - inline delegate (validated immediately at startup, including MongoDB URI parsing)
 builder.Services.AddMongoose(opts =>
 {
     opts.ConnectionString  = "mongodb://localhost:27017";
@@ -68,7 +68,7 @@ builder.Services.AddMongoose(opts =>
     opts.RetryDelay        = TimeSpan.FromMilliseconds(200); // exponential back-off base (default)
 });
 
-// Option B — bind from appsettings.json (validated at startup via MongooseOptionsValidator)
+// Option B - bind from appsettings.json (validated at startup via MongooseOptionsValidator, including MongoDB URI parsing)
 builder.Services.AddOptions<MongooseOptions>()
     .BindConfiguration("MongooseNet")
     .ValidateOnStart();
@@ -271,7 +271,8 @@ public class UsersController(IMongoRepository<User> users) : ControllerBase
                 created.Add(user);
             }
         }, ct);
-        // Commits on success, rolls back automatically on any exception
+        // Repository calls inside WithTransactionAsync automatically join the MongoDB session.
+        // Commits on success, rolls back automatically on any exception.
 
         return Ok(created.Select(u => u.Id));
     }
@@ -384,12 +385,12 @@ All methods accept an optional `CancellationToken ct` parameter.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `ConnectionString` | `string` | required | MongoDB connection string |
+| `ConnectionString` | `string` | required | MongoDB connection string; validated with `MongoUrl.Create(...)` |
 | `DatabaseName` | `string` | required | Database to connect to |
 | `AutoRegisterModels` | `bool` | `true` | Auto-scan assembly and register repositories |
 | `FilterSoftDeleted` | `bool` | `true` | Exclude soft-deleted documents from standard queries |
 | `RetryCount` | `int` | `3` | Max retries for transient errors (`0` to disable) |
-| `RetryDelay` | `TimeSpan` | `200 ms` | Base delay between retries (doubles each attempt) |
+| `RetryDelay` | `TimeSpan` | `200 ms` | Base delay between retries (doubles each attempt); must be between `0` and `1 minute` |
 
 When `AutoRegisterModels` is `false`, register models individually:
 
@@ -464,6 +465,13 @@ dotnet run
 
 ## Changelog
 
+### 1.3.0
+- Repository operations executed inside `WithTransactionAsync(...)` now automatically participate in the active MongoDB session, so repository writes are truly transactional
+- Startup validation is stricter: invalid MongoDB connection strings and excessive retry delays now fail fast during configuration
+- Retry handling is safer for production use: transient retries are skipped inside transactions and duplicate-key write failures are not retried
+- DI model discovery is more resilient when scanned assemblies contain partially loadable types
+- NuGet packaging upgraded with package validation, refreshed metadata, and updated release notes
+
 ### 1.2.0
 - Added `MongooseNet.Example` — a complete ASP.NET Core Web API project demonstrating every feature end-to-end
 - Quick Start updated: all endpoints now pass `CancellationToken`, show `DeleteManyAsync`, `BulkWriteAsync`, `WithTransactionAsync`, and `StreamAsync` in context
@@ -483,3 +491,4 @@ dotnet run
 ## License
 
 MIT © 2026 Ajin Varghese Chandy
+

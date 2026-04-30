@@ -13,6 +13,8 @@ namespace MongooseNet;
 /// <typeparam name="T">A non-abstract <see cref="BaseDocument"/> subclass.</typeparam>
 public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
 {
+    private static readonly AsyncLocal<IClientSessionHandle?> s_currentSession = new();
+
     private readonly IMongoCollection<T> _collection;
     private readonly IMongoClient _client;
     private readonly string _collectionName;
@@ -26,18 +28,26 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     /// </summary>
     public MongoRepository(IMongoCollection<T> collection, MongooseOptions? options = null)
     {
-        _collection       = collection ?? throw new ArgumentNullException(nameof(collection));
-        _collectionName   = collection.CollectionNamespace.CollectionName;
-        _client           = collection.Database.Client;
+        _collection = collection ?? throw new ArgumentNullException(nameof(collection));
+        _collectionName = collection.CollectionNamespace.CollectionName;
+        _client = collection.Database.Client;
+
+        if (options is not null)
+            options.Validate();
+
         _filterSoftDeleted = options?.FilterSoftDeleted ?? true;
-        _retryCount       = options?.RetryCount ?? 3;
-        _retryDelay       = options?.RetryDelay ?? TimeSpan.FromMilliseconds(200);
+        _retryCount = options?.RetryCount ?? 3;
+        _retryDelay = options?.RetryDelay ?? TimeSpan.FromMilliseconds(200);
     }
 
     /// <inheritdoc/>
     public IMongoCollection<T> Collection => _collection;
 
-    // ── Soft-delete filter ─────────────────────────────────────────────────────
+    /// <summary>
+    /// Gets the current ambient MongoDB session established by <see cref="WithTransactionAsync"/>.
+    /// All repository operations automatically participate when this is non-null.
+    /// </summary>
+    protected internal static IClientSessionHandle? CurrentSession => s_currentSession.Value;
 
     /// <summary>
     /// Returns a filter that excludes soft-deleted documents when
@@ -53,11 +63,9 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
             ? Builders<T>.Filter.And(Builders<T>.Filter.Where(predicate), ActiveFilter)
             : Builders<T>.Filter.Where(predicate);
 
-    // ── Queries ────────────────────────────────────────────────────────────────
-
     /// <inheritdoc/>
     public async Task<List<T>> GetAllAsync(CancellationToken ct = default)
-        => await Execute(() => _collection.Find(ActiveFilter).ToListAsync(ct));
+        => await Execute(() => Find(ActiveFilter).ToListAsync(ct), ct);
 
     /// <inheritdoc/>
     public async Task<T?> GetByIdAsync(Guid id, CancellationToken ct = default)
@@ -66,7 +74,7 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         var filter = Builders<T>.Filter.And(
             Builders<T>.Filter.Eq(x => x.Id, id),
             ActiveFilter);
-        return await Execute(() => _collection.Find(filter).FirstOrDefaultAsync(ct));
+        return await Execute(() => Find(filter).FirstOrDefaultAsync(ct), ct);
     }
 
     /// <inheritdoc/>
@@ -80,7 +88,7 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     public async Task<List<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(predicate);
-        return await Execute(() => _collection.Find(CombineWithActive(predicate)).ToListAsync(ct));
+        return await Execute(() => Find(CombineWithActive(predicate)).ToListAsync(ct), ct);
     }
 
     /// <inheritdoc/>
@@ -92,10 +100,9 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         ArgumentNullException.ThrowIfNull(predicate);
         ArgumentNullException.ThrowIfNull(projection);
         return await Execute(() =>
-            _collection
-                .Find(CombineWithActive(predicate))
+            Find(CombineWithActive(predicate))
                 .Project(projection)
-                .ToListAsync(ct));
+                .ToListAsync(ct), ct);
     }
 
     /// <inheritdoc/>
@@ -107,32 +114,32 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         bool descending = false,
         CancellationToken ct = default)
     {
-        if (page < 1)     throw new ArgumentOutOfRangeException(nameof(page),     "Page must be >= 1.");
+        if (page < 1) throw new ArgumentOutOfRangeException(nameof(page), "Page must be >= 1.");
         if (pageSize < 1) throw new ArgumentOutOfRangeException(nameof(pageSize), "PageSize must be >= 1.");
 
         var filter = predicate is not null
             ? CombineWithActive(predicate)
             : ActiveFilter;
 
-        var countTask = Execute(() => _collection.CountDocumentsAsync(filter, cancellationToken: ct));
+        var countTask = Execute(() => CountDocumentsAsync(filter, ct), ct);
 
-        var cursor = _collection.Find(filter);
+        var cursor = Find(filter);
         if (orderBy is not null)
             cursor = descending ? cursor.SortByDescending(orderBy) : cursor.SortBy(orderBy);
 
         var itemsTask = Execute(() => cursor
             .Skip((page - 1) * pageSize)
             .Limit(pageSize)
-            .ToListAsync(ct));
+            .ToListAsync(ct), ct);
 
         await Task.WhenAll(countTask, itemsTask);
 
         return new PagedResult<T>
         {
-            Items      = itemsTask.Result,
+            Items = itemsTask.Result,
             TotalCount = countTask.Result,
-            Page       = page,
-            PageSize   = pageSize,
+            Page = page,
+            PageSize = pageSize,
         };
     }
 
@@ -140,7 +147,7 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(predicate);
-        return await Execute(() => _collection.Find(CombineWithActive(predicate)).FirstOrDefaultAsync(ct));
+        return await Execute(() => Find(CombineWithActive(predicate)).FirstOrDefaultAsync(ct), ct);
     }
 
     /// <inheritdoc/>
@@ -163,7 +170,9 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         };
 
         return await Execute(() =>
-            _collection.FindOneAndUpdateAsync(CombineWithActive(predicate), combined, options, ct));
+            CurrentSession is null
+                ? _collection.FindOneAndUpdateAsync(CombineWithActive(predicate), combined, options, ct)
+                : _collection.FindOneAndUpdateAsync(CurrentSession, CombineWithActive(predicate), combined, options, ct), ct);
     }
 
     /// <inheritdoc/>
@@ -175,15 +184,7 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
             ? CombineWithActive(predicate)
             : ActiveFilter;
 
-        IAsyncCursor<T> cursor;
-        try
-        {
-            cursor = await _collection.FindAsync(filter, cancellationToken: ct);
-        }
-        catch (MongoException ex)
-        {
-            throw new MongooseNetException("A database error occurred. See inner exception for details.", ex);
-        }
+        var cursor = await Execute(() => FindAsyncCursor(filter, ct), ct);
 
         using (cursor)
         {
@@ -201,17 +202,15 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         var filter = predicate is not null
             ? CombineWithActive(predicate)
             : ActiveFilter;
-        return await Execute(() => _collection.CountDocumentsAsync(filter, cancellationToken: ct));
+        return await Execute(() => CountDocumentsAsync(filter, ct), ct);
     }
 
     /// <inheritdoc/>
     public async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(predicate);
-        return await Execute(() => _collection.Find(CombineWithActive(predicate)).AnyAsync(ct));
+        return await Execute(() => Find(CombineWithActive(predicate)).AnyAsync(ct), ct);
     }
-
-    // ── Writes ─────────────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
     public async Task<T> InsertAsync(T document, CancellationToken ct = default)
@@ -220,9 +219,9 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         document.PreSave();
         await Execute(async () =>
         {
-            await _collection.InsertOneAsync(document, cancellationToken: ct);
+            await InsertOneAsync(document, ct);
             return true;
-        });
+        }, ct);
         return document;
     }
 
@@ -235,9 +234,9 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         foreach (var doc in list) doc.PreSave();
         await Execute(async () =>
         {
-            await _collection.InsertManyAsync(list, cancellationToken: ct);
+            await InsertManyCoreAsync(list, ct);
             return true;
-        });
+        }, ct);
     }
 
     /// <inheritdoc/>
@@ -245,11 +244,11 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     {
         ArgumentNullException.ThrowIfNull(document);
         document.PreSave();
-        await Execute(() => _collection.ReplaceOneAsync(
-            x => x.Id == document.Id,
+        await Execute(() => ReplaceOneAsync(
+            Builders<T>.Filter.Eq(x => x.Id, document.Id),
             document,
             new ReplaceOptions { IsUpsert = true },
-            ct));
+            ct), ct);
         return document;
     }
 
@@ -264,7 +263,7 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
             Builders<T>.Update.Set(x => x.UpdatedAt, DateTime.UtcNow));
 
         var result = await Execute(() =>
-            _collection.UpdateOneAsync(x => x.Id == id, combined, cancellationToken: ct));
+            UpdateOneAsync(Builders<T>.Filter.Eq(x => x.Id, id), combined, ct), ct);
 
         return result.ModifiedCount > 0;
     }
@@ -280,10 +279,8 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         if (list.Count == 0)
             throw new ArgumentException("At least one write model is required.", nameof(requests));
 
-        return await Execute(() => _collection.BulkWriteAsync(list, options, ct));
+        return await Execute(() => BulkWriteCoreAsync(list, options, ct), ct);
     }
-
-    // ── Soft delete ────────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
     public async Task<bool> SoftDeleteAsync(Guid id, CancellationToken ct = default)
@@ -293,12 +290,11 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
             .Set(x => x.DeletedAt, DateTime.UtcNow)
             .Set(x => x.UpdatedAt, DateTime.UtcNow);
 
-        // Only soft-delete active documents
         var filter = Builders<T>.Filter.And(
             Builders<T>.Filter.Eq(x => x.Id, id),
             Builders<T>.Filter.Eq(x => x.DeletedAt, null));
 
-        var result = await Execute(() => _collection.UpdateOneAsync(filter, update, cancellationToken: ct));
+        var result = await Execute(() => UpdateOneAsync(filter, update, ct), ct);
         return result.ModifiedCount > 0;
     }
 
@@ -310,12 +306,11 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
             .Set(x => x.DeletedAt, (DateTime?)null)
             .Set(x => x.UpdatedAt, DateTime.UtcNow);
 
-        // Only restore soft-deleted documents
         var filter = Builders<T>.Filter.And(
             Builders<T>.Filter.Eq(x => x.Id, id),
             Builders<T>.Filter.Ne(x => x.DeletedAt, null));
 
-        var result = await Execute(() => _collection.UpdateOneAsync(filter, update, cancellationToken: ct));
+        var result = await Execute(() => UpdateOneAsync(filter, update, ct), ct);
         return result.ModifiedCount > 0;
     }
 
@@ -323,16 +318,14 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     public async Task<List<T>> GetDeletedAsync(CancellationToken ct = default)
     {
         var filter = Builders<T>.Filter.Ne(x => x.DeletedAt, null);
-        return await Execute(() => _collection.Find(filter).ToListAsync(ct));
+        return await Execute(() => Find(filter).ToListAsync(ct), ct);
     }
-
-    // ── Hard deletes ───────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
     public async Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
     {
         ThrowIfEmptyGuid(id);
-        var result = await Execute(() => _collection.DeleteOneAsync(x => x.Id == id, ct));
+        var result = await Execute(() => DeleteOneAsync(Builders<T>.Filter.Eq(x => x.Id, id), ct), ct);
         return result.DeletedCount > 0;
     }
 
@@ -340,11 +333,9 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     public async Task<long> DeleteManyAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(predicate);
-        var result = await Execute(() => _collection.DeleteManyAsync(predicate, ct));
+        var result = await Execute(() => DeleteManyAsync(Builders<T>.Filter.Where(predicate), ct), ct);
         return result.DeletedCount;
     }
-
-    // ── Transactions ───────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
     public async Task WithTransactionAsync(
@@ -353,54 +344,65 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
     {
         ArgumentNullException.ThrowIfNull(operation);
 
+        var existingSession = CurrentSession;
+        if (existingSession is not null)
+        {
+            await operation(existingSession);
+            return;
+        }
+
         using var session = await _client.StartSessionAsync(cancellationToken: ct);
-        session.StartTransaction();
+        s_currentSession.Value = session;
+
         try
         {
+            session.StartTransaction();
             await operation(session);
             await session.CommitTransactionAsync(ct);
         }
         catch
         {
-            await session.AbortTransactionAsync(ct);
+            if (session.IsInTransaction)
+                await session.AbortTransactionAsync(ct);
             throw;
         }
+        finally
+        {
+            s_currentSession.Value = null;
+        }
     }
-
-    // ── Helpers ────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Wraps every MongoDB driver call to translate <see cref="MongoException"/> into
     /// <see cref="MongooseNetException"/>, with optional exponential back-off retry
     /// for transient errors.
     /// </summary>
-    private async Task<TResult> Execute<TResult>(Func<Task<TResult>> operation)
+    private async Task<TResult> Execute<TResult>(Func<Task<TResult>> operation, CancellationToken ct)
     {
         var attempt = 0;
         while (true)
         {
+            ct.ThrowIfCancellationRequested();
+
             try
             {
                 return await operation();
             }
-            catch (MongoException ex) when (IsTransient(ex) && attempt < _retryCount)
+            catch (MongoException ex) when (IsTransient(ex) && ShouldRetry(ex) && attempt < _retryCount)
             {
                 attempt++;
                 var delay = TimeSpan.FromMilliseconds(_retryDelay.TotalMilliseconds * Math.Pow(2, attempt - 1));
-                await Task.Delay(delay);
+                await Task.Delay(delay, ct);
             }
             catch (MongoException ex)
             {
-                // Sanitise message — don't expose raw topology/connection details
                 throw new MongooseNetException("A database error occurred. See inner exception for details.", ex);
             }
         }
     }
 
-    /// <summary>
-    /// Returns <c>true</c> for transient MongoDB errors that are safe to retry
-    /// (network timeouts, not-primary, connection pool exhausted).
-    /// </summary>
+    private bool ShouldRetry(MongoException ex) => CurrentSession is null && !IsDuplicateKey(ex);
+
     private static bool IsTransient(MongoException ex) => ex is
         MongoConnectionException or
         MongoConnectionPoolPausedException or
@@ -408,9 +410,72 @@ public class MongoRepository<T> : IMongoRepository<T> where T : BaseDocument
         MongoNodeIsRecoveringException or
         MongoExecutionTimeoutException;
 
+    private static bool IsDuplicateKey(MongoException ex) => ex switch
+    {
+        MongoWriteException writeException => writeException.WriteError?.Category == ServerErrorCategory.DuplicateKey,
+        MongoBulkWriteException<T> bulkWriteException => bulkWriteException.WriteErrors.Any(e => e.Category == ServerErrorCategory.DuplicateKey),
+        _ => false,
+    };
+
+    private IFindFluent<T, T> Find(FilterDefinition<T> filter) =>
+        CurrentSession is null
+            ? _collection.Find(filter)
+            : _collection.Find(CurrentSession, filter);
+
+    private Task<IAsyncCursor<T>> FindAsyncCursor(FilterDefinition<T> filter, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.FindAsync(filter, cancellationToken: ct)
+            : _collection.FindAsync(CurrentSession, filter, cancellationToken: ct);
+
+    private Task<long> CountDocumentsAsync(FilterDefinition<T> filter, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.CountDocumentsAsync(filter, cancellationToken: ct)
+            : _collection.CountDocumentsAsync(CurrentSession, filter, cancellationToken: ct);
+
+    private Task InsertOneAsync(T document, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.InsertOneAsync(document, cancellationToken: ct)
+            : _collection.InsertOneAsync(CurrentSession, document, cancellationToken: ct);
+
+    private Task InsertManyCoreAsync(IEnumerable<T> documents, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.InsertManyAsync(documents, cancellationToken: ct)
+            : _collection.InsertManyAsync(CurrentSession, documents, cancellationToken: ct);
+
+    private Task<ReplaceOneResult> ReplaceOneAsync(
+        FilterDefinition<T> filter,
+        T document,
+        ReplaceOptions options,
+        CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.ReplaceOneAsync(filter, document, options, ct)
+            : _collection.ReplaceOneAsync(CurrentSession, filter, document, options, ct);
+
+    private Task<UpdateResult> UpdateOneAsync(FilterDefinition<T> filter, UpdateDefinition<T> update, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.UpdateOneAsync(filter, update, cancellationToken: ct)
+            : _collection.UpdateOneAsync(CurrentSession, filter, update, cancellationToken: ct);
+
+    private Task<BulkWriteResult<T>> BulkWriteCoreAsync(IEnumerable<WriteModel<T>> requests, BulkWriteOptions? options, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.BulkWriteAsync(requests, options, ct)
+            : _collection.BulkWriteAsync(CurrentSession, requests, options, ct);
+
+    private Task<DeleteResult> DeleteOneAsync(FilterDefinition<T> filter, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.DeleteOneAsync(filter, ct)
+            : _collection.DeleteOneAsync(CurrentSession, filter, null, ct);
+
+    private Task<DeleteResult> DeleteManyAsync(FilterDefinition<T> filter, CancellationToken ct) =>
+        CurrentSession is null
+            ? _collection.DeleteManyAsync(filter, ct)
+            : _collection.DeleteManyAsync(CurrentSession, filter, null, ct);
+
     private static void ThrowIfEmptyGuid(Guid id)
     {
         if (id == Guid.Empty)
             throw new ArgumentException("Id must not be Guid.Empty.", nameof(id));
     }
 }
+
+
